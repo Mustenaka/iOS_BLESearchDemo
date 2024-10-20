@@ -7,49 +7,70 @@
 
 import SwiftUI
 import SwiftData
+import CoreBluetooth
+
+struct BluetoothDevice: Identifiable {
+    let id = UUID()
+    let name: String
+    let peripheral: CBPeripheral
+}
+
+class BluetoothManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
+    private var centralManager: CBCentralManager!
+    @Published var discoveredPeripherals: [(peripheral: CBPeripheral, rssi: Int)] = []
+
+    override init() {
+        super.init()
+        centralManager = CBCentralManager(delegate: self, queue: nil)
+    }
+
+    func startScanning() {
+        discoveredPeripherals.removeAll() // 清空之前的扫描结果
+        centralManager.scanForPeripherals(withServices: nil, options: nil)
+    }
+
+    func connect(to peripheral: CBPeripheral) {
+        centralManager.connect(peripheral, options: nil)
+    }
+
+    func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
+        // 检查设备是否已经存在于已发现的设备列表中
+        if let index = discoveredPeripherals.firstIndex(where: { $0.peripheral.identifier == peripheral.identifier }) {
+            // 如果设备已经存在，则更新其RSSI值
+            discoveredPeripherals[index].rssi = RSSI.intValue
+        } else {
+            // 如果设备不存在，则添加到已发现设备列表
+            discoveredPeripherals.append((peripheral: peripheral, rssi: RSSI.intValue))
+        }
+        // 按照RSSI值从高到低排序
+        discoveredPeripherals.sort { $0.rssi > $1.rssi }
+    }
+
+    func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        if central.state != .poweredOn {
+            print("Bluetooth is not available.")
+        }
+    }
+
+    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        print("Connected to \(peripheral.name ?? "Unknown device")")
+    }
+}
+
 
 struct ContentView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query private var items: [Item]
+    @StateObject private var bluetoothManager = BluetoothManager()
 
     var body: some View {
-        NavigationSplitView {
-            List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))")
-                    } label: {
-                        Text(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))
-                    }
-                }
-                .onDelete(perform: deleteItems)
+        VStack {
+            Button("Search for Bluetooth Devices") {
+                bluetoothManager.startScanning()
             }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    EditButton()
-                }
-                ToolbarItem {
-                    Button(action: addItem) {
-                        Label("Add Item", systemImage: "plus")
+            List(bluetoothManager.discoveredPeripherals, id: \.peripheral.identifier) { device in
+                Text("\(device.peripheral.name ?? "Unknown") - RSSI: \(device.rssi)")
+                    .onTapGesture {
+                        bluetoothManager.connect(to: device.peripheral)
                     }
-                }
-            }
-        } detail: {
-            Text("Select an item")
-        }
-    }
-
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(timestamp: Date())
-            modelContext.insert(newItem)
-        }
-    }
-
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            for index in offsets {
-                modelContext.delete(items[index])
             }
         }
     }
